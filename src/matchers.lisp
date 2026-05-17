@@ -13,8 +13,10 @@
            #:has-hash-entries
            #:has-properties
            #:has-slots
+           #:has-accessors
            #:hasnt-plist-keys
            #:has-type
+           #:instance-of
            #:any
            #:has-length
            #:contains
@@ -264,6 +266,7 @@ for each indentation level."
                            check-obj-type
                            get-key-value
                            format-error-message
+                           format-key-context
                            format-matcher-description)
   "Defines a new macro to check if object has some properties."
 
@@ -273,7 +276,8 @@ for each indentation level."
      (let ((get-key-value ',get-key-value)
            (check-obj-type ',check-obj-type)
            (format-matcher-description ',format-matcher-description)
-           (format-error-message ',format-error-message))
+           (format-error-message ',format-error-message)
+           (format-key-context ',format-key-context))
       
        (with-gensyms (expected-key expected-value matcher)
          `(symbol-macrolet ((_ (any)))
@@ -283,6 +287,8 @@ for each indentation level."
                                             expected-value
                                             key-value)
                        ,format-error-message)
+                     (format-key-context (key)
+                       ,format-key-context)
                      (,matcher (object)
                        ,check-obj-type
                        
@@ -301,7 +307,8 @@ condition 'assertion-error with reason \"Key ~S is missing\"."
                                  ;; if expected-value is callable, then it is a matcher
                                  ;; and we should call it to check
                                  (if (functionp ,expected-value)
-                                     (funcall ,expected-value key-value)
+                                     (with-context (format-key-context ,expected-key)
+                                       (funcall ,expected-value key-value))
                                      ;; or check if it's value is same as specified
                                      (when (not (equal key-value
                                                        ,expected-value))
@@ -360,6 +367,7 @@ This way you can test any number of plist's entries."
                                 expected-key
                                 key-value
                                 expected-value)
+  :format-key-context (format nil "Plist entry ~S" key)
   :format-matcher-description (format-expected-entries "Has plist entries"))
 
 
@@ -402,6 +410,7 @@ This way you can test any number of plist's entries."
                                 expected-key
                                 key-value
                                 expected-value)
+  :format-key-context (format nil "Alist entry ~S" key)
   :format-matcher-description (format-expected-entries "Has alist entries"))
 
 
@@ -444,6 +453,7 @@ This way you can test any number of plist's entries."
                                 expected-key
                                 key-value
                                 expected-value)
+  :format-key-context (format nil "Hash entry ~S" key)
   :format-matcher-description (format-expected-entries "Has hash entries"))
 
 
@@ -480,6 +490,7 @@ This way you can test any number of plist's entries."
                                 expected-key
                                 key-value
                                 expected-value)
+  :format-key-context (format nil "Property ~S" key)
   :format-matcher-description (format-expected-entries "Has properties"))
 
 
@@ -527,7 +538,48 @@ This way you can test any number of plist's entries."
                                 expected-key
                                 key-value
                                 expected-value)
+  :format-key-context (format nil "Slot ~S" key)
   :format-matcher-description (format-expected-entries "Has slots"))
+
+
+(def-has-macro
+    has-accessors
+  "Matches object by calling accessor functions on it:
+
+   ```
+   TEST> (defclass rectangle ()
+           ((width :initarg :width :accessor rect-width)
+            (height :initarg :height :accessor rect-height)))
+
+   TEST> (defvar rect (make-instance 'rectangle :width 5 :height 10))
+
+   TEST> (assert-that rect
+                      (has-accessors 'rect-width 5))
+     ✓ Has accessors:
+         RECT-WIDTH = 5
+
+   TEST> (assert-that rect
+                      (has-accessors 'rect-width 42))
+     × Accessor RECT-WIDTH returned 5, but 42 was expected
+   ```
+"
+
+  :check-obj-type (check-if-has-slots object)
+  :get-key-value (handler-case
+                     (funcall key object)
+                   (undefined-function (e)
+                     (declare (ignore e))
+                     (error 'assertion-error
+                            :reason (format nil "Accessor ~S is not defined" key)))
+                   (error (e)
+                     (error 'assertion-error
+                            :reason (format nil "Accessor ~S failed on object: ~A" key e))))
+  :format-error-message (format nil "Accessor ~S returned ~S, but ~S was expected"
+                                expected-key
+                                key-value
+                                expected-value)
+  :format-key-context (format nil "Accessor ~S" key)
+  :format-matcher-description (format-expected-entries "Has accessors"))
 
 
 (defmacro hasnt-plist-keys (&rest keys)
@@ -847,5 +899,61 @@ This way you can test any number of plist's entries."
                    t))
         (description (format nil "Has type ~A"
                              expected-type)))
+    (setf (matcher-description matcher) description)
+    matcher))
+
+
+(defun instance-of (expected-type &rest matchers)
+  "Checks that an object is an instance of the expected type, and
+   optionally applies additional matchers to it.
+
+   This is useful for asserting both the class of an object and
+   properties of its slots or accessors in a single expression:
+
+   ```
+   TEST> (assert-that obj
+                      (instance-of 'rectangle
+                        (has-slots 'width 5 'height 10)))
+   ```
+
+   Can also be used without additional matchers to just check the type:
+
+   ```
+   TEST> (assert-that obj (instance-of 'rectangle))
+     ✓ Instance of RECTANGLE
+   ```
+
+   When a nested matcher fails, the error includes context showing the
+   type that was being checked:
+
+   ```
+   TEST> (assert-that obj
+                      (instance-of 'rectangle
+                        (has-slots 'width 42)))
+     × Instance of RECTANGLE
+         Slot WIDTH has 5 value, but 42 was expected
+   ```
+"
+
+  (let* ((combined (when matchers
+                     (if (= (length matchers) 1)
+                         (first matchers)
+                         (apply #'has-all matchers))))
+         (matcher (lambda (value)
+                    (unless (typep value expected-type)
+                      (error 'assertion-error
+                             :reason (format nil "~S has type ~A, but ~A was expected"
+                                             value
+                                             (type-of value)
+                                             expected-type)))
+                    (when combined
+                      (with-context (format nil "Instance of ~A" expected-type)
+                        (funcall combined value)))
+                    t))
+         (description (if combined
+                         (format nil "Instance of ~A, ~A"
+                                 expected-type
+                                 (matcher-description combined))
+                         (format nil "Instance of ~A" expected-type))))
     (setf (matcher-description matcher) description)
     matcher))
