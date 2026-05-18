@@ -766,8 +766,8 @@ This way you can test any number of plist's entries."
    ```
 "
   (with-gensyms (matcher entries-var)
-    `(let ((,entries-var (list ,@entries)))
-       (symbol-macrolet ((_ (any)))
+    `(symbol-macrolet ((_ (any)))
+       (let ((,entries-var (list ,@entries)))
          (flet ((,matcher (value)
                   (let ((entries-len (length ,entries-var))
                         (value-len (length value)))
@@ -812,7 +812,6 @@ This way you can test any number of plist's entries."
              ;; Return resulting matcher
              matcher-function))))))
 
-
 (defmacro contains-in-any-order (&rest entries)
   "Same as ``contains``, but items in the sequence can be in any order:
 
@@ -829,52 +828,53 @@ This way you can test any number of plist's entries."
    ```
 "
   (with-gensyms (matcher)
-    `(flet ((,matcher (value)
-              
-              (let ((entries-len (length (list ,@entries)))
-                    (value-len (length value)))
-                (when (< value-len entries-len)
-                  (error 'assertion-error
-                         :reason "Result is shorter than expected"))
-                (when (> value-len entries-len)
-                  (error 'assertion-error
-                         :reason "Expected value is shorter than result"))
-                (iter (for item in (list ,@entries))
-                  (unless (find item value
-                                :test (lambda (expected checked-item)
-                                        (if (functionp expected)
-                                            ;; pass value to next matcher
-                                            (handler-case
-                                                (progn
-                                                  (funcall expected checked-item)
-                                                  ;; if matched, then return True
-                                                  t)
-                                              (assertion-error (c)
-                                                (declare (ignorable c))
-                                                ;; if condition was thrown, then item
-                                                ;; does not conform to the matcher
-                                                nil))
-                                            ;; otherwise, just check for equality
-                                            (equal checked-item expected)
-                                            )))
+    `(symbol-macrolet ((_ (any)))
+       (flet ((,matcher (value)
+                
+                (let ((entries-len (length (list ,@entries)))
+                      (value-len (length value)))
+                  (when (< value-len entries-len)
                     (error 'assertion-error
-                           :reason (if (functionp item)
-                                       (format nil
-                                               "Value which ~S is missing"
-                                               (or (matcher-description item)
-                                                   ;; if for some reason matcher's description
-                                                   ;; wasn't found
-                                                   item))
-                                       (format nil
-                                               "Value ~S is missing"
-                                               item))))))
-              ;; return true to show that everything is ok
-              t))
-       
-       (let ((description "Contains all given values"))
-         (setf (matcher-description (function ,matcher))
-               description)
-         (function ,matcher)))))
+                           :reason "Result is shorter than expected"))
+                  (when (> value-len entries-len)
+                    (error 'assertion-error
+                           :reason "Expected value is shorter than result"))
+                  (iter (for item in (list ,@entries))
+                    (unless (find item value
+                                  :test (lambda (expected checked-item)
+                                          (if (functionp expected)
+                                              ;; pass value to next matcher
+                                              (handler-case
+                                                  (progn
+                                                    (funcall expected checked-item)
+                                                    ;; if matched, then return True
+                                                    t)
+                                                (assertion-error (c)
+                                                  (declare (ignorable c))
+                                                  ;; if condition was thrown, then item
+                                                  ;; does not conform to the matcher
+                                                  nil))
+                                              ;; otherwise, just check for equality
+                                              (equal checked-item expected)
+                                              )))
+                      (error 'assertion-error
+                             :reason (if (functionp item)
+                                         (format nil
+                                                 "Value which ~S is missing"
+                                                 (or (matcher-description item)
+                                                     ;; if for some reason matcher's description
+                                                     ;; wasn't found
+                                                     item))
+                                         (format nil
+                                                 "Value ~S is missing"
+                                                 item))))))
+                ;; return true to show that everything is ok
+                t))
+         
+         (let ((description "Contains all given values"))
+           (setf (matcher-description (function ,matcher))
+                 description)
+           (function ,matcher))))))
 
 
 (defun has-type (expected-type)
